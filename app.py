@@ -3,6 +3,8 @@ import tensorflow as tf
 from tensorflow.keras.models import load_model
 from PIL import Image
 import numpy as np
+import os
+import gdown
 
 # --- App Configuration ---
 st.set_page_config(
@@ -12,26 +14,42 @@ st.set_page_config(
     initial_sidebar_state="auto",
 )
 
-# --- Load The Model ---
-# Cache the model loading to prevent reloading on every interaction
+# --- Model File ID ---
+# This is the ID extracted from your specific Google Drive link
+GOOGLE_DRIVE_FILE_ID = '1GbPoQBNWAFs-Cg9XINHJDIlyKob4TCZD'
+
+# --- Load The Models ---
 @st.cache_resource
 def load_pest_model():
     """
-    Loads the pre-trained crop pest detection model.
+    Downloads the model from Google Drive if not present, then loads it.
     """
+    model_path = 'crop_pest_model.h5'
+    
+    # Check if model exists locally; if not, download it
+    if not os.path.exists(model_path):
+        
+        try:
+            # Construct the download URL for gdown
+            url = f'https://drive.google.com/uc?id={GOOGLE_DRIVE_FILE_ID}'
+            gdown.download(url, model_path, quiet=False)
+            
+        except Exception as e:
+            st.error(f"Failed to download model: {e}")
+            return None
+
     try:
-        # Load the model with custom objects if it contains custom layers/activations
-        model = load_model('crop_pest_model.h5')
+        # Load the model
+        # compile=False is safer/faster for inference-only
+        model = load_model(model_path, compile=False)
         return model
     except Exception as e:
-        st.error(f"Error loading model: {e}")
-        st.error("Please ensure the 'crop_pest_model.h5' file is in the same directory as this script.")
+        st.error(f"Error loading model file: {e}")
         return None
 
-model = load_pest_model()
+vision_model = load_pest_model()
 
 # --- Class Names ---
-# IMPORTANT: This list must match the training data's class indices.
 CLASS_NAMES = [
     'Cashew anthracnose', 'Cashew gumosis', 'Cashew healthy', 'Cashew leaf miner', 'Cashew red rust',
     'Cassava bacterial blight', 'Cassava brown spot', 'Cassava green mite', 'Cassava healthy', 'Cassava mosaic',
@@ -40,57 +58,45 @@ CLASS_NAMES = [
     'Tomato septoria leaf spot', 'Tomato verticulium wilt'
 ]
 
-# --- Image Preprocessing ---
+# --- Helper Functions ---
 def preprocess_image(image):
-    """
-    Preprocesses the user-uploaded image to match the model's input requirements.
-    """
-    # Ensure image is in RGB format (3 channels)
+    """Preprocesses the image for the model."""
     if image.mode != 'RGB':
         image = image.convert('RGB')
-        
-    # Resize the image to the target size (150x150)
     img = image.resize((150, 150))
-    # Convert the image to a numpy array
     img_array = np.array(img)
-    # Expand dimensions to create a batch of 1
     img_array = np.expand_dims(img_array, axis=0)
-    # Normalize pixel values
     img_array = img_array / 255.0
     return img_array
 
-
-# --- Main Application UI ---
+# --- UI Layout ---
 st.title("🌿 Crop Pest & Disease Detection")
-st.markdown("Upload an image of a crop leaf, and the model will predict the pest or disease.")
+st.markdown("Upload a crop leaf image for instant disease classification.")
 
-# File uploader
 uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
 
-if uploaded_file is not None and model is not None:
-    # Display the uploaded image
+if uploaded_file is not None:
     image = Image.open(uploaded_file)
-    st.image(image, caption='Uploaded Image.', use_container_width=True) # Updated parameter
-    st.write("")
+    # Using use_column_width for compatibility
+    st.image(image, caption='Uploaded Image', use_column_width=True)
+    
+    if st.button('Analyze Crop Health'):
+        if vision_model is None:
+            st.error("Model failed to load. Please check internet connection or Drive Link.")
+        else:
+            with st.spinner('Analyzing...'):
+                processed_image = preprocess_image(image)
+                try:
+                    prediction = vision_model.predict(processed_image)
+                    idx = np.argmax(prediction, axis=1)[0]
+                    pred_name = CLASS_NAMES[idx]
+                    confidence = np.max(prediction) * 100
 
-    # Predict button
-    if st.button('Detect Pest/Disease'):
-        with st.spinner('Analyzing the image...'):
-            # Preprocess the image
-            processed_image = preprocess_image(image)
+                    st.success(f"**Prediction:** {pred_name}")
+                    st.info(f"**Confidence:** {confidence:.2f}%")
 
-            # Make a prediction
-            try:
-                prediction = model.predict(processed_image)
-                predicted_class_index = np.argmax(prediction, axis=1)[0]
-                predicted_class_name = CLASS_NAMES[predicted_class_index]
-                confidence = np.max(prediction) * 100
-
-                st.success(f"**Prediction:** {predicted_class_name}")
-                st.info(f"**Confidence:** {confidence:.2f}%")
-
-            except Exception as e:
-                st.error(f"An error occurred during prediction: {e}")
+                except Exception as e:
+                    st.error(f"Prediction Error: {e}")
 
 # --- Sidebar Information ---
 st.sidebar.title("About")
